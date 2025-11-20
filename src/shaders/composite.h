@@ -183,7 +183,7 @@ const float subpixelKernelB[49] = float[49](
      9.5637e-03, -2.3571e-02, -2.7867e-02, -4.9899e-02, -4.5404e-02, -3.7778e-02, -3.0901e-02
 );
 
-SubpixelFilterInfo getSubpixelFilterInfo(int filterType)
+SubpixelFilterInfo getSubpixelFilterInfo(uint filterType)
 {
     if (filterType == filter_subpixel_rgb_vertical)
     {
@@ -193,12 +193,12 @@ SubpixelFilterInfo getSubpixelFilterInfo(int filterType)
     return SubpixelFilterInfo(vec2(-1.0f), ivec2(0), ivec2(0));
 }
 
-bool isSubpixelFilter(int filterType)
+bool isSubpixelFilter(uint filterType)
 {
     return filterType == filter_subpixel_rgb_vertical;
 }
 
-vec3 getSubpixelKernel(int filterType, int index)
+vec3 getSubpixelKernel(uint filterType, int index)
 {
     if (filterType == filter_subpixel_rgb_vertical)
     {
@@ -208,7 +208,7 @@ vec3 getSubpixelKernel(int filterType, int index)
     return vec3(0.0f);
 }
 
-vec4 sampleSubpixelDownscale(sampler2D tex, vec2 pixelCoord, vec2 texSize, vec2 scale, int filterType, uint colorspace)
+vec4 sampleSubpixelDownscale(sampler2D tex, vec2 pixelCoord, vec2 texSize, vec2 scale, uint filterType, uint colorspace)
 {
     SubpixelFilterInfo info = getSubpixelFilterInfo(filterType);
 
