@@ -146,6 +146,106 @@ vec4 sampleBilinear(sampler2D tex, vec2 coord, uint colorspace, bool unnormalize
     return mix(temp1, temp0, filterWeight.y);
 }
 
+struct SubpixelFilterInfo
+{
+    vec2 expectedScale;
+    ivec2 kernelSize;
+    ivec2 padding;
+};
+
+const float subpixelKernelR[49] = float[49](
+    -1.0526e-02, -5.1071e-02, -8.5119e-02, -6.1192e-02, -9.1344e-03,  3.5897e-03,  5.5279e-03,
+    -2.4249e-03,  2.6682e-02,  2.3826e-02,  2.4192e-02,  1.0538e-02,  1.9939e-03, -1.1452e-03,
+    -1.9276e-03,  1.1129e-01,  1.5322e-01,  1.1598e-01,  2.3158e-02, -2.1166e-02, -1.9158e-02,
+    -9.8290e-03,  1.7032e-01,  2.3965e-01,  1.8491e-01,  2.8468e-02, -4.0587e-02, -4.3002e-02,
+    -2.0463e-03,  1.1078e-01,  1.5392e-01,  1.1533e-01,  2.3271e-02, -2.1582e-02, -1.7926e-02,
+    -2.5467e-03,  2.6298e-02,  2.4420e-02,  2.3553e-02,  1.0961e-02,  1.5187e-03, -1.6591e-04,
+    -1.0415e-02, -5.1437e-02, -8.4871e-02, -6.2043e-02, -8.7220e-03,  3.4067e-03,  6.0927e-03
+);
+
+const float subpixelKernelG[49] = float[49](
+     3.8514e-03, -5.4484e-03, -5.0128e-02, -8.9105e-02, -5.3422e-02, -6.5463e-03,  4.3577e-03,
+    -4.5839e-03,  1.0168e-02,  2.2712e-02,  2.5182e-02,  2.1549e-02,  1.0217e-02, -3.9492e-03,
+    -3.3225e-02,  1.9505e-02,  1.0794e-01,  1.6799e-01,  1.0714e-01,  1.9900e-02, -3.2187e-02,
+    -5.6365e-02,  2.1324e-02,  1.6300e-01,  2.5932e-01,  1.6246e-01,  2.2935e-02, -5.5869e-02,
+    -3.3211e-02,  1.9467e-02,  1.0804e-01,  1.6802e-01,  1.0719e-01,  1.9986e-02, -3.2075e-02,
+    -4.5877e-03,  1.0157e-02,  2.2687e-02,  2.5167e-02,  2.1636e-02,  1.0232e-02, -3.8778e-03,
+     3.8308e-03, -5.4800e-03, -5.0085e-02, -8.9107e-02, -5.3422e-02, -6.5015e-03,  4.4328e-03
+);
+
+const float subpixelKernelB[49] = float[49](
+     1.1707e-02, -1.5588e-02, -2.6335e-02, -5.8017e-02, -5.6514e-02, -3.8170e-02, -2.2234e-02,
+    -2.0525e-02,  2.2323e-02, -5.5703e-03,  4.2159e-02,  1.9901e-03,  3.5535e-02, -1.5025e-02,
+    -1.5280e-02, -4.1840e-02,  2.8163e-02,  1.2661e-01,  1.7142e-01,  1.0636e-01, -3.2487e-03,
+    -4.0351e-02,  5.7782e-03,  5.7683e-02,  1.6544e-01,  1.8679e-01,  1.5421e-01,  1.2911e-02,
+    -4.0655e-03, -3.8520e-02,  4.1863e-02,  9.2533e-02,  1.6531e-01,  1.0219e-01,  1.5415e-02,
+    -1.0176e-02,  2.1141e-02,  9.2225e-03,  1.2310e-02,  1.4885e-03,  3.3014e-02, -4.7787e-04,
+     9.5637e-03, -2.3571e-02, -2.7867e-02, -4.9899e-02, -4.5404e-02, -3.7778e-02, -3.0901e-02
+);
+
+SubpixelFilterInfo getSubpixelFilterInfo(int filter)
+{
+    if (filter == filter_subpixel_rgb_vertical)
+    {
+        return SubpixelFilterInfo(vec2(3.0f), ivec2(7), ivec2(2));
+    }
+
+    return SubpixelFilterInfo(vec2(-1.0f), ivec2(0), ivec2(0));
+}
+
+bool isSubpixelFilter(int filter)
+{
+    return filter == filter_subpixel_rgb_vertical;
+}
+
+vec3 getSubpixelKernel(int filter, int index)
+{
+    if (filter == filter_subpixel_rgb_vertical)
+    {
+        return vec3(subpixelKernelR[index], subpixelKernelG[index], subpixelKernelB[index]);
+    }
+
+    return vec3(0.0f);
+}
+
+vec4 sampleSubpixelDownscale(sampler2D tex, vec2 pixelCoord, vec2 texSize, vec2 scale, int filter, uint colorspace)
+{
+    SubpixelFilterInfo info = getSubpixelFilterInfo(filter);
+
+    // Unknown filter or unexpected scale? Fall back to bilinear for safety.
+    if (info.expectedScale.x < 0.0f || any(greaterThan(abs(scale - info.expectedScale), vec2(0.01f))))
+    {
+        return sampleBilinear(tex, pixelCoord, colorspace, true);
+    }
+
+    ivec2 origin = ivec2(round(pixelCoord)) - info.padding;
+    ivec2 bounds = ivec2(texSize) - ivec2(1);
+
+    vec3 accum = vec3(0.0f);
+    float accumA = 0.0f;
+
+    for (int ky = 0; ky < info.kernelSize.y; ky++)
+    {
+        for (int kx = 0; kx < info.kernelSize.x; kx++)
+        {
+            ivec2 sampleCoord = origin + ivec2(kx, ky);
+            sampleCoord = clamp(sampleCoord, ivec2(0), bounds);
+
+            vec4 texel = texelFetch(tex, sampleCoord, 0);
+            vec3 linear = colorspace_plane_degamma_tf(texel.rgb, colorspace);
+
+            int kernelIndex = ky * info.kernelSize.x + kx;
+            vec3 kernel = getSubpixelKernel(filter, kernelIndex);
+            accum += linear * kernel;
+
+            float weightA = (kernel.r + kernel.g + kernel.b) * (1.0f / 3.0f);
+            accumA += texel.a * weightA;
+        }
+    }
+
+    return vec4(accum, accumA);
+}
+
 vec4 sampleLayerEx(sampler2D layerSampler, uint offsetLayerIdx, uint colorspaceLayerIdx, vec2 uv, bool unnormalized) {
     vec2 coord = ((uv + u_offset[offsetLayerIdx]) * u_scale[offsetLayerIdx]);
     vec2 texSize = textureSize(layerSampler, 0);
@@ -160,6 +260,8 @@ vec4 sampleLayerEx(sampler2D layerSampler, uint offsetLayerIdx, uint colorspaceL
         return vec4(0.0f, 0.0f, 0.0f, border);
     }
 
+    vec2 pixelCoord = coord;
+
     if (!unnormalized)
         coord /= texSize;
 
@@ -169,6 +271,9 @@ vec4 sampleLayerEx(sampler2D layerSampler, uint offsetLayerIdx, uint colorspaceL
         vec2 output_res = texSize / u_scale[offsetLayerIdx];
         vec2 extent = max((texSize / output_res), vec2(1.0 / 256.0));
         color = sampleBandLimited(layerSampler, coord, unnormalized ? vec2(1.0f) : texSize, unnormalized ? vec2(1.0f) : vec2(1.0f) / texSize, extent, colorspace, unnormalized);
+    }
+    else if (isSubpixelFilter(get_layer_shaderfilter(offsetLayerIdx))) {
+        color = sampleSubpixelDownscale(layerSampler, pixelCoord, texSize, u_scale[offsetLayerIdx], get_layer_shaderfilter(offsetLayerIdx), colorspace);
     }
     else if (get_layer_shaderfilter(offsetLayerIdx) == filter_linear_emulated) {
         color = sampleBilinear(layerSampler, coord, colorspace, unnormalized);
